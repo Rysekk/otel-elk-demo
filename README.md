@@ -87,6 +87,6 @@ curl -s http://localhost:8200 | python3 -m json.tool
 - [x] Étape 1 — Elasticsearch + Kibana
 - [x] Étape 2 — APM Server (pont OTLP → ES)
 - [x] Étape 3 — OTel Collector en mode Gateway
-- [ ] Étape 4 — App FastAPI avec auto-instrumentation zero-code
-- [ ] Étape 5 — Validation end-to-end + exploration Kibana APM
+- [x] Étape 4 — App FastAPI avec auto-instrumentation zero-code
+- [x] Étape 5 — Validation end-to-end + exploration Kibana APM
 - [ ] Étape 6 — Manifests Kubernetes (DaemonSet + Deployment Gateway)
