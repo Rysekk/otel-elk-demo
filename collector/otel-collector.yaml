@@ -26,9 +26,8 @@ exporters:
     endpoint: apm-server:8200
     tls:
       insecure: true
-
   debug:
-    verbosity: basic
+    verbosity: detailed
 
 
 

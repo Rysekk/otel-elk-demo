@@ -50,12 +50,26 @@ services:
     image: otel/opentelemetry-collector-contrib:0.154.0
     container_name: otel-collector
     volumes:
-      - ./collector/otel-collector.yaml:/etc/otelcol/config.yaml
+      - ./collector/otel-collector.yaml:/etc/otelcol-contrib/config.yaml
     ports:
       - 4317:4317 # OTLP gRPC receiver
-      - 4318:4318 # OTLP http receiver"
+      - 4318:4318 # OTLP http receiver
     depends_on:
       - apm-server
+    networks:
+      - otel-net
+    
+  app:
+    build: ./app
+    container_name: app
+    environment:
+      OTEL_SERVICE_NAME: fastapi-demo
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    ports:
+      - 8080:8080
+    depends_on:
+      - otel-collector
     networks:
       - otel-net
 
