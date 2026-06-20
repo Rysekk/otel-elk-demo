@@ -2,18 +2,13 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
     container_name: elasticsearch
-    volumes:
-    - esdata:/usr/share/elasticsearch/data
     environment:
     - node.name=elasticsearch
     - discovery.type=single-node
-    - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
-    - xpack.security.enabled=true
-    - xpack.security.http.ssl.enabled=false
-    - xpack.security.transport.ssl.enabled=false
     - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    - xpack.security.enabled=false
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -u elastic:${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1"]
       interval: 5s
       timeout: 10s
       retries: 5
@@ -28,10 +23,6 @@ services:
     container_name: kibana
     environment:
     - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    - ELASTICSEARCH_SERVICEACCOUNTTOKEN=${TOKEN_ES}
-    - XPACK_SECURITY_ENCRYPTIONKEY=${XPACK_SECURITY_ENCRYPTIONKEY}
-    - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY}
-    - XPACK_REPORTING_ENCRYPTIONKEY=${XPACK_REPORTING_ENCRYPTIONKEY}
     ports:
       - "5601:5601"
     depends_on:
@@ -45,8 +36,6 @@ services:
     command: >
         apm-server -e
           -E output.elasticsearch.hosts=["http://elasticsearch:9200"]
-          -E output.elasticsearch.username=elastic
-          -E output.elasticsearch.password=${ELASTIC_PASSWORD}
           -E apm-server.host="0.0.0.0:8200"
           -E apm-server.data_streams.wait_for_integration=false
     ports:
@@ -84,9 +73,7 @@ services:
     networks:
       - otel-net
 
+
 networks:
   otel-net:
     driver: bridge
-volumes:
-  esdata:
-    driver: local
