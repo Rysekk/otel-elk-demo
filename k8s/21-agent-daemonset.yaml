@@ -12,6 +12,7 @@ spec:
       labels:
         app: otel-agent
     spec:
+      serviceAccountName: otel-agent
       containers:
       - image: otel/opentelemetry-collector-contrib:0.154.0
         name: otel-agent

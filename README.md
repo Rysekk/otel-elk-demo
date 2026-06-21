@@ -25,7 +25,7 @@ Tous les services tournent sur un seul hôte, avec un Collector unique en mode G
 
 ### Architecture cible (Kubernetes)
 
-L'application FastAPI et les Collectors tournent dans le cluster, selon un pattern à deux niveaux : un Collector **DaemonSet** (un par nœud) collecte la télémétrie locale et la forward vers un Collector **Gateway** (Deployment centralisé), qui exporte vers le backend. Le backend Elastic (APM Server + ES + Kibana) reste externe au cluster — il représente un backend d'observabilité managé.
+L'application FastAPI et les Collectors tournent dans le cluster, selon un pattern à deux niveaux : un Collector **DaemonSet** (un par nœud) collecte la télémétrie locale et la forward vers un Collector **Gateway** (Deployment centralisé), qui exporte vers le backend. Le backend Elastic (APM Server + ES + Kibana) reste externe au cluster, il représente un backend d'observabilité managé.
 
 ```
 ┌─ Cluster Kubernetes (k3d) ─────────────────────────────────────────────────────┐
@@ -42,6 +42,7 @@ L'application FastAPI et les Collectors tournent dans le cluster, selon un patte
 │  │   │ OTel Agent          │     │    │   │ OTel Agent          │     │        │
 │  │   │ (DaemonSet pod)     │     │    │   │ (DaemonSet pod)     │     │        │
 │  │   │ hostPort 4317/4318  │     │    │   │ hostPort 4317/4318  │     │        │
+│  │   │ + k8sattributes     │     │    │   │ + k8sattributes     │     │        │
 │  │   └──────────┬──────────┘     │    │   └──────────┬──────────┘     │        │
 │  │              │                │    │              │                │        │
 │  └──────────────┼────────────────┘    └──────────────┼────────────────┘        │
@@ -53,27 +54,29 @@ L'application FastAPI et les Collectors tournent dans le cluster, selon un patte
 │                   │  OTel Gateway                  │                           │
 │                   │  (Deployment + Service)        │                           │
 │                   │  reçoit OTLP, batch, route     │                           │
+│                   │  + bearer token (Secret)       │                           │
 │                   └────────────────┬───────────────┘                           │
 │                                    │                                           │
 └────────────────────────────────────┼───────────────────────────────────────────┘
                                      │
-                                     │  OTLP → host.k3d.internal:8200
+                                     │  OTLP + Bearer token → host.k3d.internal:8200
                                      │  (sortie du cluster vers backend externe)
                                      ▼
 ┌─ Backend externe (Docker Compose / managé) ───────────────────────────────────┐
 │                                                                               │
-│   ┌────────────┐   HTTP    ┌───────────────┐   ◀──▶   ┌─────────────┐        │
-│   │ APM Server │ ────────▶ │ Elasticsearch │          │   Kibana     │        │
+│   ┌────────────┐   HTTP    ┌───────────────┐           ┌─────────────┐        │
+│   │ APM Server │ ────────▶ │ Elasticsearch │  ◀──▶   │   Kibana    │        │
 │   │   :8200    │           │     :9200     │           │    :5601    │        │
 │   │ OTLP→ECS   │           │  data streams │           │  UI APM     │        │
-│   └────────────┘           └───────────────┘           └─────────────┘        │
+│   │ secret tok │           └───────────────┘           └─────────────┘        │
+│   └────────────┘                                                              │
 │                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Rôle de chaque niveau de Collector :**
-- **Agent (DaemonSet)** : collecte au plus près des pods, enrichit avec les métadonnées du nœud (`k8s.node.name`, `k8s.pod.name`, `k8s.namespace.name`), décharge les apps du buffering. L'app le joint via l'IP de son propre nœud (`status.hostIP` + `hostPort`), garantissant la localité, pas de trafic inter-nœuds.
-- **Gateway (Deployment)** : point de sortie centralisé, batching/sampling global, isolation du backend. Changer de destination (ELK ↔ Grafana) ne touche qu'au Gateway.
+- **Agent (DaemonSet)** : collecte au plus près des pods, enrichit avec les métadonnées Kubernetes via le processor `k8sattributes` (`k8s.pod.name`, `k8s.namespace.name`, `k8s.node.name`, `k8s.deployment.name`), décharge les apps du buffering. L'app le joint via l'IP de son propre nœud (`status.hostIP` + `hostPort`), garantissant la localité, pas de trafic inter-nœuds.
+- **Gateway (Deployment)** : point de sortie centralisé, batching/sampling global, isolation du backend, et authentification vers l'APM Server via un bearer token. Changer de destination (ELK ↔ Grafana) ne touche qu'au Gateway.
 
 ## Composants
 
@@ -90,6 +93,7 @@ L'application FastAPI et les Collectors tournent dans le cluster, selon un patte
 - **APM Server plutôt que Logstash** : l'APM Server comprend nativement OTLP et mappe automatiquement les champs OTel vers ECS. Logstash reste pertinent pour les sources non-OTel (syslog, fichiers bruts, JDBC).
 - **Collector en mode Gateway** : un point d'entrée centralisé pour la télémétrie, indépendant des backends. Permet de basculer entre ELK et Grafana/LGTM sans modifier les applications. Sur Kubernetes, un DaemonSet collecte par nœud et forward vers un Deployment Gateway centralisé.
 - **Agent ciblé via `hostIP`, pas via Service** : un Service ferait du load-balancing aléatoire vers n'importe quel agent (potentiellement sur un autre nœud), cassant la localité de la collecte. L'app vise l'IP de son nœud pour atteindre son agent local.
+- **Association pod via downward API** : le NAT du `hostPort` masque l'IP source du pod, empêchant `k8sattributes` de l'identifier par la connexion. L'app expose donc son IP de pod (`status.podIP`) comme attribut de ressource OTel (`k8s.pod.ip`), sur lequel le processor fait l'association. La règle `connection` est conservée en filet de sécurité.
 - **Backend externe au cluster** : en production, Elasticsearch et Kibana sont généralement managés (Elastic Cloud) ou sur un cluster dédié, séparés des workloads. Joint ici via `host.k3d.internal` (artefact de dev local ; en prod, un DNS routable).
 - **Auto-instrumentation zero-code** : aucune dépendance OTel dans le code applicatif. La configuration se fait entièrement par variables d'environnement.
 - **Deux variantes Compose** : `docker-compose.insecure.yml` (sécurité désactivée, démarrage immédiat) et `docker-compose.yml` (authentification de bout en bout, UI APM complète via l'intégration Fleet). Illustre la maturation prototype → hardening.
@@ -97,18 +101,25 @@ L'application FastAPI et les Collectors tournent dans le cluster, selon un patte
 ## Pipeline OTel Collector
 
 ```
-Receiver OTLP → memory_limiter → resource → batch → Exporter OTLP
+Receiver OTLP → memory_limiter → [k8sattributes] → resource → batch → Exporter OTLP
 ```
 
-Les processors suivent l'ordre recommandé : `memory_limiter` en premier pour protéger le Collector, `resource` pour enrichir, `batch` en dernier pour optimiser les envois réseau.
+Les processors suivent l'ordre recommandé : `memory_limiter` en premier pour protéger le Collector, puis l'enrichissement (`k8sattributes` côté agent, avant le batch pour préserver l'association span↔pod), `resource` pour les attributs statiques, `batch` en dernier pour optimiser les envois réseau.
+
+## Sécurité
+
+- **Stack Compose sécurisée** : sécurité Elasticsearch activée (authentification, sans TLS interne), Kibana authentifié via un service account token (moindre privilège vs superuser), clés de chiffrement Kibana. Volume `esdata` pour persister l'index `.security`.
+- **Ingestion K8s authentifiée** : l'endpoint OTLP de l'APM Server exige un secret token. Le Gateway l'envoie via l'extension `bearertokenauth`, le token étant stocké dans un Secret Kubernetes (pas dans une ConfigMap, les ConfigMaps sont en clair).
+- **RBAC pour k8sattributes** : l'agent dispose d'un ServiceAccount + ClusterRole + ClusterRoleBinding lui donnant l'accès en lecture aux pods, namespaces, nodes et replicasets nécessaires à l'enrichissement.
+- **Gestion des secrets** : aucun secret n'est versionné. Les fichiers `.env` et le Secret K8s sont dans `.gitignore` ; des templates `.example` documentent leur structure. En production : Sealed Secrets, External Secrets Operator ou un secret manager (Vault).
 
 ## Arborescence
 
 ```
 otel-elk-demo/
-├── docker-compose.yml            # variante sécurisée (auth + UI APM complète)
-├── docker-compose.insecure.yml   # variante démo (sans sécurité, démarrage rapide)
-├── .env                          # secrets : mot de passe ES, token Kibana, clés de chiffrement
+├── docker-compose.yml             # variante sécurisée (auth + UI APM complète)
+├── docker-compose.insecure.yml    # variante démo (sans sécurité, démarrage rapide)
+├── .env                           # secrets Compose (gitignored)
 ├── README.md
 ├── collector/
 │   └── otel-collector.yaml
@@ -119,10 +130,12 @@ otel-elk-demo/
 └── k8s/
     ├── 00-namespace.yaml
     ├── 10-gateway-configmap.yaml
-    ├── 11-gateway-deployment.yaml    # Deployment + Service du Gateway
+    ├── 11-gateway-deployment.yaml     # Deployment + Service du Gateway
+    ├── 12-gateway-secret.example.yaml # template du Secret (versionné), changer le nom par 12-gateway-secret.yaml
     ├── 20-agent-configmap.yaml
     ├── 21-agent-daemonset.yaml
-    └── 30-app-deployment.yaml        # Deployment + Service de l'app
+    ├── 22-agent-rbac.yaml             # ServiceAccount + ClusterRole + Binding
+    └── 30-app-deployment.yaml         # Deployment + Service de l'app
 ```
 
 ## Prérequis
@@ -134,7 +147,13 @@ otel-elk-demo/
 
 ## Configuration (.env)
 
-La variante sécurisée lit ses secrets depuis un fichier `.env` à la racine. Crée-le avant de démarrer :
+La variante sécurisée lit ses secrets depuis un fichier `.env` à la racine:
+
+```bash
+touch .env
+```
+
+Contenu attendu :
 
 ```bash
 # Mot de passe du superuser Elasticsearch
@@ -147,6 +166,9 @@ TOKEN_ES=
 XPACK_SECURITY_ENCRYPTIONKEY=
 XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=
 XPACK_REPORTING_ENCRYPTIONKEY=
+
+# Secret token exigé par l'APM Server sur l'ingestion OTLP (partie K8s)
+APM_SECRET_TOKEN=
 ```
 
 Génère les trois clés de chiffrement avec :
@@ -155,7 +177,7 @@ Génère les trois clés de chiffrement avec :
 openssl rand -hex 32   # à lancer 3 fois, une par clé
 ```
 
-Le `.env` ne doit jamais être commité — ajoute-le à `.gitignore`.
+Les fichiers `.env` et `k8s/12-gateway-secret.yaml` ne doivent jamais être commités, ils sont dans `.gitignore`.
 
 ## Démarrage: Docker Compose
 
@@ -178,7 +200,7 @@ L'exploration des traces se fait via **Discover** (data view sur `traces-apm-*`)
 
 ### Variante sécurisée (auth + UI APM complète)
 
-1. Crée le `.env` avec `ELASTIC_PASSWORD` et les clés de chiffrement (voir section Configuration).
+1. Crée le `.env` (voir section Configuration).
 
 2. Démarre Elasticsearch seul, puis génère le service token Kibana :
 
@@ -228,7 +250,14 @@ k3d cluster create otel-demo --agents 2
 k3d image import otel-elk-demo-app:latest -c otel-demo
 ```
 
-3. Applique les manifests dans l'ordre :
+3. Prépare le Secret du bearer token à partir du template (le vrai fichier reste hors Git) :
+
+```bash
+cp k8s/12-gateway-secret.example.yaml k8s/12-gateway-secret.yaml
+# Édite k8s/12-gateway-secret.yaml et renseigne la même valeur que APM_SECRET_TOKEN du .env
+```
+
+4. Applique les manifests :
 
 ```bash
 kubectl apply -f k8s/
@@ -237,7 +266,7 @@ kubectl get pods -n otel-demo -o wide
 
 Tu devrais voir l'app, un agent par nœud (DaemonSet) et le gateway, tous `Running`.
 
-4. Génère du trafic via port-forward et valide le flux end-to-end :
+5. Génère du trafic via port-forward et valide le flux end-to-end :
 
 ```bash
 kubectl port-forward -n otel-demo deployment/app 8080:8080 &
@@ -246,7 +275,7 @@ sleep 12
 curl -s -u elastic:$ELASTIC_PASSWORD "http://localhost:9200/traces-apm-default/_count" | python3 -m json.tool
 ```
 
-Le compteur de traces doit augmenter, confirmant le flux **App → Agent local → Gateway → APM Server → Elasticsearch**.
+Le compteur de traces doit augmenter, confirmant le flux **App → Agent local → Gateway → APM Server → Elasticsearch**. Les traces portent leurs métadonnées Kubernetes (`kubernetes.pod.name`, `kubernetes.namespace`, `kubernetes.node.name`, `kubernetes.deployment.name`), visibles dans Kibana.
 
 ### Générer du trafic de test (Compose)
 
@@ -263,3 +292,4 @@ for i in $(seq 1 30); do curl -s localhost:8080/items/$i > /dev/null; curl -s lo
 - [x] Étape 5 — Validation end-to-end + exploration Kibana (Discover)
 - [x] Bonus — Variante sécurisée (auth ES + service token + intégration APM → UI APM complète)
 - [x] Étape 6 — Déploiement Kubernetes (DaemonSet Agent + Gateway, ConfigMaps, Services, pattern à deux niveaux)
+- [x] Durcissement K8s — ingestion authentifiée (bearer token + Secret) et enrichissement `k8sattributes` (RBAC + downward API)

@@ -18,6 +18,12 @@ spec:
         name: otel-gateway
         args:
           - "--config=/etc/otelcol-contrib/config.yaml"
+        env:
+          - name: SECRET_TOKEN_APM_SERVER
+            valueFrom:
+              secretKeyRef:
+                name: apm-server-token
+                key: token
         resources:
             requests:
               cpu: 10m

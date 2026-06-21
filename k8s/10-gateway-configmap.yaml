@@ -6,6 +6,9 @@ metadata:
 data:
   config.yaml: |
     #CONFIG collector
+    extensions:
+      bearertokenauth:
+        token: ${env:SECRET_TOKEN_APM_SERVER}
     receivers:
       otlp:
         protocols:
@@ -26,23 +29,24 @@ data:
       batch:
         timeout: 5s
     exporters:
-      otlp:
-        endpoint: host.k3d.internal:8200
-        tls:
-          insecure: true
+      otlphttp:
+        endpoint: http://host.k3d.internal:8200
+        auth:
+          authenticator: bearertokenauth
       debug:
         verbosity: detailed
     service:
+      extensions: [bearertokenauth]
       pipelines:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, resource, batch]
-          exporters: [otlp,debug]
+          exporters: [otlphttp,debug]
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, resource, batch]
-          exporters: [otlp,debug]
+          exporters: [otlphttp,debug]
         logs:
           receivers: [otlp]
           processors: [memory_limiter, resource, batch]
-          exporters: [otlp,debug]
+          exporters: [otlphttp,debug]

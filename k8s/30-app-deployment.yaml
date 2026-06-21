@@ -22,12 +22,18 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
           - name: OTEL_SERVICE_NAME
             value: fastapi-demo
           - name: OTEL_EXPORTER_OTLP_ENDPOINT
             value: http://$(NODE_IP):4317
           - name: OTEL_EXPORTER_OTLP_PROTOCOL
             value: grpc
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "k8s.pod.ip=$(POD_IP)"
         resources:
             requests:
               cpu: 10m

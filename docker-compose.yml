@@ -49,6 +49,7 @@ services:
           -E output.elasticsearch.password=${ELASTIC_PASSWORD}
           -E apm-server.host="0.0.0.0:8200"
           -E apm-server.data_streams.wait_for_integration=false
+          -E apm-server.auth.secret_token=${SECRET_TOKEN_APM_SERVER}
     ports:
       - "8200:8200"
     depends_on:
